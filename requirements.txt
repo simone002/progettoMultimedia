@@ -1,0 +1,10 @@
+numpy
+matplotlib
+scikit-image
+imagecodecs
+opencv-python
+pandas
+scikit-learn
+xgboost
+torch
+torchvision
