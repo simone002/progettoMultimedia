@@ -252,6 +252,36 @@ def projection_profile_features(binary_image):
     """Statistiche sui profili di proiezione orizzontale/verticale."""
     img = binary_image.astype(bool)
     h, w = img.shape
+
+    def _shape_stats(x: np.ndarray, prefix: str):
+        if x.size == 0:
+            return {
+                f"{prefix}_q25": 0.0,
+                f"{prefix}_q50": 0.0,
+                f"{prefix}_q75": 0.0,
+                f"{prefix}_skew": 0.0,
+                f"{prefix}_kurtosis": 0.0,
+            }
+
+        mean = float(np.mean(x))
+        std = float(np.std(x))
+        if std < 1e-12:
+            skew = 0.0
+            kurt = 0.0
+        else:
+            centered = x - mean
+            z = centered / std
+            skew = float(np.mean(z**3))
+            kurt = float(np.mean(z**4))
+
+        return {
+            f"{prefix}_q25": float(np.quantile(x, 0.25)),
+            f"{prefix}_q50": float(np.quantile(x, 0.50)),
+            f"{prefix}_q75": float(np.quantile(x, 0.75)),
+            f"{prefix}_skew": skew,
+            f"{prefix}_kurtosis": kurt,
+        }
+
     if h == 0 or w == 0:
         return {
             "row_proj_mean": 0.0,
@@ -259,11 +289,21 @@ def projection_profile_features(binary_image):
             "row_proj_max": 0.0,
             "row_proj_argmax_norm": 0.0,
             "row_nonzero_ratio": 0.0,
+            "row_proj_q25": 0.0,
+            "row_proj_q50": 0.0,
+            "row_proj_q75": 0.0,
+            "row_proj_skew": 0.0,
+            "row_proj_kurtosis": 0.0,
             "col_proj_mean": 0.0,
             "col_proj_std": 0.0,
             "col_proj_max": 0.0,
             "col_proj_argmax_norm": 0.0,
             "col_nonzero_ratio": 0.0,
+            "col_proj_q25": 0.0,
+            "col_proj_q50": 0.0,
+            "col_proj_q75": 0.0,
+            "col_proj_skew": 0.0,
+            "col_proj_kurtosis": 0.0,
         }
 
     row_proj = np.sum(img, axis=1).astype(float) / max(1.0, float(w))
@@ -272,7 +312,7 @@ def projection_profile_features(binary_image):
     row_argmax = int(np.argmax(row_proj)) if row_proj.size else 0
     col_argmax = int(np.argmax(col_proj)) if col_proj.size else 0
 
-    return {
+    out = {
         "row_proj_mean": float(np.mean(row_proj)) if row_proj.size else 0.0,
         "row_proj_std": float(np.std(row_proj)) if row_proj.size else 0.0,
         "row_proj_max": float(np.max(row_proj)) if row_proj.size else 0.0,
@@ -284,6 +324,10 @@ def projection_profile_features(binary_image):
         "col_proj_argmax_norm": float(col_argmax / max(1, w - 1)),
         "col_nonzero_ratio": float(np.mean(col_proj > 0)) if col_proj.size else 0.0,
     }
+
+    out.update(_shape_stats(row_proj, "row_proj"))
+    out.update(_shape_stats(col_proj, "col_proj"))
+    return out
 
 
 def spatial_balance_features(binary_image):
@@ -531,4 +575,166 @@ def hole_position_features(binary_image):
         "hole_centroid_y_norm": y_norm,
         "hole_centroid_x_norm": x_norm,
         "hole_centroid_spread": spread,
+    }
+
+
+def contour_depth_features(binary_image):
+    """Profili top/bottom per colonna: utili su archi/valle (es. u/n, f/t)."""
+    img = binary_image.astype(bool)
+    h, w = img.shape
+    if h == 0 or w == 0:
+        return {
+            "top_depth_mean_norm": 0.0,
+            "top_depth_std_norm": 0.0,
+            "top_depth_range_norm": 0.0,
+            "bottom_depth_mean_norm": 0.0,
+            "bottom_depth_std_norm": 0.0,
+            "bottom_depth_range_norm": 0.0,
+            "top_center_depth_mean_norm": 0.0,
+            "bottom_center_depth_mean_norm": 0.0,
+        }
+
+    top_depths = []
+    bottom_depths = []
+    top_center = []
+    bottom_center = []
+
+    c0 = int(round(w * 0.33))
+    c1 = int(round(w * 0.67))
+    if c1 <= c0:
+        c0, c1 = 0, w
+
+    for c in range(w):
+        ys = np.where(img[:, c])[0]
+        if ys.size == 0:
+            continue
+
+        top_d = float(ys.min())
+        bottom_d = float((h - 1) - ys.max())
+        top_depths.append(top_d)
+        bottom_depths.append(bottom_d)
+
+        if c0 <= c < c1:
+            top_center.append(top_d)
+            bottom_center.append(bottom_d)
+
+    if not top_depths:
+        return {
+            "top_depth_mean_norm": 0.0,
+            "top_depth_std_norm": 0.0,
+            "top_depth_range_norm": 0.0,
+            "bottom_depth_mean_norm": 0.0,
+            "bottom_depth_std_norm": 0.0,
+            "bottom_depth_range_norm": 0.0,
+            "top_center_depth_mean_norm": 0.0,
+            "bottom_center_depth_mean_norm": 0.0,
+        }
+
+    top_arr = np.asarray(top_depths, dtype=float)
+    bottom_arr = np.asarray(bottom_depths, dtype=float)
+    denom = max(1.0, float(h - 1))
+
+    top_center_mean = float(np.mean(top_center)) if top_center else float(np.mean(top_arr))
+    bottom_center_mean = float(np.mean(bottom_center)) if bottom_center else float(np.mean(bottom_arr))
+
+    return {
+        "top_depth_mean_norm": float(np.mean(top_arr) / denom),
+        "top_depth_std_norm": float(np.std(top_arr) / denom),
+        "top_depth_range_norm": float((np.max(top_arr) - np.min(top_arr)) / denom),
+        "bottom_depth_mean_norm": float(np.mean(bottom_arr) / denom),
+        "bottom_depth_std_norm": float(np.std(bottom_arr) / denom),
+        "bottom_depth_range_norm": float((np.max(bottom_arr) - np.min(bottom_arr)) / denom),
+        "top_center_depth_mean_norm": float(top_center_mean / denom),
+        "bottom_center_depth_mean_norm": float(bottom_center_mean / denom),
+    }
+
+
+def endpoint_distribution_features(endpoint_mask):
+    """Distribuzione spaziale delle terminazioni (utile su f/t e u/n)."""
+    m = endpoint_mask.astype(bool)
+    h, w = m.shape
+    ys, xs = np.where(m)
+
+    if ys.size == 0:
+        return {
+            "endpoints_top_ratio": 0.0,
+            "endpoints_bottom_ratio": 0.0,
+            "endpoints_left_ratio": 0.0,
+            "endpoints_right_ratio": 0.0,
+            "endpoints_lower_quarter_ratio": 0.0,
+        }
+
+    top_ratio = float(np.mean(ys < (h * 0.5)))
+    bottom_ratio = float(np.mean(ys >= (h * 0.5)))
+    left_ratio = float(np.mean(xs < (w * 0.5)))
+    right_ratio = float(np.mean(xs >= (w * 0.5)))
+    lower_quarter_ratio = float(np.mean(ys >= (h * 0.75)))
+
+    return {
+        "endpoints_top_ratio": top_ratio,
+        "endpoints_bottom_ratio": bottom_ratio,
+        "endpoints_left_ratio": left_ratio,
+        "endpoints_right_ratio": right_ratio,
+        "endpoints_lower_quarter_ratio": lower_quarter_ratio,
+    }
+
+
+def _count_runs_1d(arr_1d: np.ndarray, value: int) -> int:
+    a = (arr_1d.astype(np.uint8) == np.uint8(value)).astype(np.uint8)
+    if a.size == 0:
+        return 0
+    padded = np.pad(a, (1, 1), constant_values=0)
+    starts = np.sum((padded[1:-1] == 1) & (padded[:-2] == 0))
+    return int(starts)
+
+
+def midline_run_features(binary_image):
+    """Pattern su riga/colonna mediana e apertura lato destro (utile su e/a, f/t)."""
+    img = binary_image.astype(bool)
+    h, w = img.shape
+    if h == 0 or w == 0:
+        return {
+            "mid_row_fg_runs": 0.0,
+            "mid_row_bg_runs": 0.0,
+            "mid_row_fg_fill": 0.0,
+            "mid_row_right_bg_tail_norm": 0.0,
+            "mid_col_fg_runs": 0.0,
+            "mid_col_fg_fill": 0.0,
+            "upper_third_density": 0.0,
+            "lower_third_density": 0.0,
+            "upper_lower_density_ratio": 0.0,
+        }
+
+    mid_r = h // 2
+    mid_c = w // 2
+    row = img[mid_r, :]
+    col = img[:, mid_c]
+
+    fg_runs_row = _count_runs_1d(row.astype(np.uint8), value=1)
+    bg_runs_row = _count_runs_1d(row.astype(np.uint8), value=0)
+    fg_runs_col = _count_runs_1d(col.astype(np.uint8), value=1)
+
+    right_tail = 0
+    for val in row[::-1]:
+        if val:
+            break
+        right_tail += 1
+
+    t0, t1 = 0, max(1, int(round(h / 3.0)))
+    b0, b1 = min(h, int(round(2 * h / 3.0))), h
+    upper_density = float(np.mean(img[t0:t1, :])) if t1 > t0 else 0.0
+    lower_density = float(np.mean(img[b0:b1, :])) if b1 > b0 else 0.0
+    raw_ratio = float((upper_density + 1e-4) / (lower_density + 1e-4))
+    stable_ratio = float(np.clip(raw_ratio, 0.0, 10.0))
+
+    return {
+        "mid_row_fg_runs": float(fg_runs_row),
+        "mid_row_bg_runs": float(bg_runs_row),
+        "mid_row_fg_fill": float(np.mean(row)),
+        "mid_row_right_bg_tail_norm": float(right_tail / max(1, w)),
+        "mid_col_fg_runs": float(fg_runs_col),
+        "mid_col_fg_fill": float(np.mean(col)),
+        "upper_third_density": upper_density,
+        "lower_third_density": lower_density,
+        "upper_lower_density_ratio": stable_ratio,
     }

@@ -23,6 +23,9 @@ from src.morphology_logic import (
     scanline_structure_features,
     border_contact_features,
     hole_position_features,
+    contour_depth_features,
+    endpoint_distribution_features,
+    midline_run_features,
 )
 from skimage import morphology, measure
 
@@ -123,6 +126,9 @@ def analyze_alphabet():
                     scanline_feats = scanline_structure_features(binary)
                     border_feats = border_contact_features(binary)
                     hole_pos_feats = hole_position_features(binary)
+                    contour_feats = contour_depth_features(binary)
+                    endpoint_dist_feats = endpoint_distribution_features(endpoint_mask)
+                    midline_feats = midline_run_features(binary)
 
                     endpoint_norm = float(endpoints) / max(1, skeleton_len_clean)
                     junction_norm = float(junctions) / max(1, skeleton_len_clean)
@@ -191,6 +197,15 @@ def analyze_alphabet():
                         sample_row[k] = round(float(v), 6)
 
                     for k, v in hole_pos_feats.items():
+                        sample_row[k] = round(float(v), 6)
+
+                    for k, v in contour_feats.items():
+                        sample_row[k] = round(float(v), 6)
+
+                    for k, v in endpoint_dist_feats.items():
+                        sample_row[k] = round(float(v), 6)
+
+                    for k, v in midline_feats.items():
                         sample_row[k] = round(float(v), 6)
 
                     results.append(sample_row)

@@ -36,7 +36,6 @@ Il progetto è organizzato in moduli separati, ognuno con una responsabilità ch
 
 - [src/preprocessing.py](src/preprocessing.py): caricamento immagine, conversione in scala di grigi, binarizzazione con soglia di Otsu.
 - [src/morphology_logic.py](src/morphology_logic.py): funzioni morfologiche principali (endpoints, junctions, pruning, ricostruzione, hole counting).
-- [main.py](main.py): pipeline end-to-end su una pagina manoscritta.
 - [analyze_letter.py](analyze_letter.py): analisi statistica delle feature per lettera.
 - [src/visualization.py](src/visualization.py): visualizzazione della distribuzione delle lettere nel piano delle feature.
 
@@ -84,6 +83,7 @@ Ulteriore estensione (ultima iterazione) con descrittori di forma e invarianti:
 - **Hu moments**: `hu_1` ... `hu_7` (invarianti a rotazione/scala/traslazione, in forma log-compressa).
 - **Zoning density (3x3)**: `zone_r*_c*_density` per catturare la distribuzione spaziale locale del tratto.
 - **Projection profiles**: statistiche dei profili orizzontali/verticali (`row_proj_*`, `col_proj_*`) per rappresentare la forma lungo assi principali.
+	- includono anche descrittori statistici aggiuntivi: quantili (`*_q25`, `*_q50`, `*_q75`), asimmetria (`*_skew`) e curtosi (`*_kurtosis`).
 
 Estensione mirata alle classi più ambigue (ultima iterazione):
 

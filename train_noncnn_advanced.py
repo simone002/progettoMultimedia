@@ -47,6 +47,7 @@ BASE_FEATURE_COLS = [
 ]
 TARGET_COL = "lettera"
 SUBJECT_COL = "soggetto"
+TARGET_CONFUSION_PAIRS = [("u", "n"), ("f", "t"), ("e", "a")]
 
 
 def split_by_subject(
@@ -280,6 +281,33 @@ def save_xgb_feature_importance_plot(xgb_pipeline: Pipeline, feature_cols: list[
     plt.close(fig)
 
 
+def compute_target_pair_confusions(y_true, y_pred, target_pairs):
+    y_true_arr = np.asarray(y_true, dtype=str)
+    y_pred_arr = np.asarray(y_pred, dtype=str)
+    out = {}
+
+    for a, b in target_pairs:
+        mask_a = y_true_arr == a
+        mask_b = y_true_arr == b
+
+        support_a = int(np.sum(mask_a))
+        support_b = int(np.sum(mask_b))
+        a_to_b = int(np.sum(mask_a & (y_pred_arr == b)))
+        b_to_a = int(np.sum(mask_b & (y_pred_arr == a)))
+
+        out[f"{a}_vs_{b}"] = {
+            "support_true_a": support_a,
+            "support_true_b": support_b,
+            "a_to_b": a_to_b,
+            "b_to_a": b_to_a,
+            "a_to_b_rate": float(a_to_b / max(1, support_a)),
+            "b_to_a_rate": float(b_to_a / max(1, support_b)),
+            "bidirectional_total": int(a_to_b + b_to_a),
+        }
+
+    return out
+
+
 def main():
     if not INPUT_CSV.exists():
         raise FileNotFoundError(f"File non trovato: {INPUT_CSV}. Esegui prima analyze_letter.py")
@@ -407,6 +435,11 @@ def main():
             "classification_report": report,
             "confusion_matrix_image": str(cm_path),
             "confusion_matrix_normalized_image": str(cm_norm_path),
+            "target_pair_confusions": compute_target_pair_confusions(
+                y_true=y_test,
+                y_pred=y_pred,
+                target_pairs=TARGET_CONFUSION_PAIRS,
+            ),
         }
 
         summary_rows.append(
