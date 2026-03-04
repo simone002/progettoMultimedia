@@ -34,6 +34,7 @@ La struttura è pensata per supportare sia test qualitativi (immagine singola) s
 ## Architettura logica
 Il progetto è organizzato in moduli separati, ognuno con una responsabilità chiara:
 
+- [extract_characters_cvl.py](extract_characters_cvl.py): estrazione automatica di caratteri da immagini CVL (single/batch), con salvataggio crop e bounding box.
 - [src/preprocessing.py](src/preprocessing.py): caricamento immagine, conversione in scala di grigi, binarizzazione con soglia di Otsu.
 - [src/morphology_logic.py](src/morphology_logic.py): funzioni morfologiche principali (endpoints, junctions, pruning, ricostruzione, hole counting).
 - [analyze_letter.py](analyze_letter.py): analisi statistica delle feature per lettera.
@@ -46,13 +47,14 @@ Questa separazione rende il progetto facilmente estendibile e più semplice da m
 ## Flusso di elaborazione
 Il flusso implementato è il seguente:
 
-1. **Caricamento immagine** e verifica del path.
-2. **Binarizzazione** con Otsu per separare tratto e sfondo.
-3. **Scheletrizzazione** per ridurre i tratti alla loro struttura essenziale.
-4. **Pruning iterativo** per rimuovere ramificazioni spurie dovute al rumore.
-5. **Ricostruzione morfologica** per recuperare la forma coerente del carattere.
-6. **Estrazione feature** morfologiche.
-7. **Aggregazione statistica** per lettera e visualizzazione finale.
+1. **(Opzionale) Segmentazione caratteri da pagine CVL** con [extract_characters_cvl.py](extract_characters_cvl.py), che produce crop dei caratteri e manifest con bounding box.
+2. **Caricamento immagine** e verifica del path.
+3. **Binarizzazione** con Otsu per separare tratto e sfondo.
+4. **Scheletrizzazione** per ridurre i tratti alla loro struttura essenziale.
+5. **Pruning iterativo** per rimuovere ramificazioni spurie dovute al rumore.
+6. **Ricostruzione morfologica** per recuperare la forma coerente del carattere.
+7. **Estrazione feature** morfologiche.
+8. **Aggregazione statistica** per lettera e visualizzazione finale.
 
 ---
 
@@ -99,6 +101,7 @@ Queste misure permettono una descrizione compatta, interpretabile e più robusta
 ## Stato attuale dell’implementazione
 Attualmente il progetto consente di:
 
+- estrarre caratteri da immagini CVL in modalità single/batch con salvataggio dei crop,
 - eseguire una pipeline completa su immagine manoscritta,
 - calcolare statistiche medie per lettera,
 - salvare automaticamente i risultati in CSV,
@@ -126,6 +129,7 @@ Dipendenze centralizzate in [requirements.txt](requirements.txt).
 ## Output prodotti dalla fase di analisi
 L’analisi genera automaticamente:
 
+- [output/extracted_characters/extraction_manifest.csv](output/extracted_characters/extraction_manifest.csv) *(se eseguita la segmentazione CVL)*: mapping tra immagine sorgente, indice carattere e bounding box.
 - [output/analysis/features_samples.csv](output/analysis/features_samples.csv): feature a livello campione (include colonna `soggetto`).
 - [output/analysis/features_summary.csv](output/analysis/features_summary.csv): medie per lettera (tutti i soggetti aggregati).
 - [output/analysis/features_summary_per_subject.csv](output/analysis/features_summary_per_subject.csv): medie per combinazione soggetto-lettera (utile per analisi di variabilità).

@@ -1,0 +1,505 @@
+\documentclass[a4paper,12pt]{article}
+
+\usepackage[italian]{babel}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{siunitx}
+\usepackage{enumitem}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue}
+
+\title{Analisi morfologica e classificazione non-CNN di lettere manoscritte}
+\author{Studente: \rule{6cm}{0.4pt}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Questo lavoro propone una pipeline completa e interpretabile per il riconoscimento di lettere manoscritte basata su Morfologia Matematica.
+L'idea centrale è separare in modo esplicito le fasi di: (i) pulizia dell'immagine, (ii) estrazione di struttura geometrica/topologica, (iii) classificazione supervisionata.
+Le immagini sono binarizzate (Otsu), scheletrizzate e potate (pruning) per ridurre il rumore mantenendo l'informazione di forma.
+Da queste rappresentazioni vengono estratte feature robuste (topologiche, geometriche, spaziali, statistiche), poi usate da modelli non-CNN (SVM RBF, ExtraTrees, XGBoost).
+La valutazione è svolta con split per soggetto e con cross-validation subject-wise, per misurare la reale capacità di generalizzare a calligrafie mai viste.
+Il miglior risultato holdout è ottenuto da XGBoost (Accuracy 0.7369, Macro-F1 0.7338), confermando che il feature engineering morfologico è competitivo e ben motivato.
+\end{abstract}
+
+\section{Introduzione}
+Il riconoscimento di scrittura manoscritta è un problema complesso per tre motivi principali:
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{variabilità inter-soggetto}: la stessa lettera può avere forme molto diverse;
+  \item \textbf{rumore di acquisizione}: sfondo, spessori irregolari, piccole sbavature;
+  \item \textbf{ambiguità intrinseca}: alcune coppie di lettere sono naturalmente simili.
+\end{itemize}
+
+Invece di una soluzione end-to-end con rete neurale profonda, questo progetto adotta un approccio \textbf{esplicativo}: ogni passaggio è leggibile e ogni feature ha un significato geometrico o topologico chiaro. 
+
+\paragraph{Obiettivi.}
+\begin{itemize}[leftmargin=1.5em]
+  \item Ridurre il rumore preservando la struttura del tratto.
+  \item Estrarre descrittori topologici e geometrici robusti.
+  \item Validare la generalizzazione tra soggetti diversi con protocollo subject-wise.
+  \item Mantenere una pipeline riproducibile e interpretabile in tutte le fasi.
+\end{itemize}
+
+\section{Dataset e organizzazione}
+Il dataset è organizzato per soggetto e classe, nella forma:
+\begin{center}
+\texttt{data/lettere/<soggetto>/<lettera>/<immagine>}
+\end{center}
+
+Questa struttura permette di tenere separata l'identità del soggetto dalla classe della lettera, condizione fondamentale per evitare data leakage quando si fa split train/test.
+
+Statistiche principali:
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{14521} campioni totali,
+  \item \textbf{25} classi di lettere,
+  \item \textbf{20} soggetti.
+\end{itemize}
+
+In pratica, ogni campione attraversa la stessa pipeline morfologica e viene trasformato in un vettore numerico uniforme, poi aggregabile per analisi globale o per soggetto.
+
+\subsection{Preparazione del dataset: estrazione caratteri da CVL}
+Per includere anche la fase di costruzione del dataset, è stato aggiunto uno script dedicato:
+\texttt{extract\_characters\_cvl.py}.
+
+Lo script opera su immagine singola o in batch e realizza:
+\begin{enumerate}[leftmargin=1.5em]
+  \item conversione in grayscale,
+  \item binarizzazione adattiva + denoising,
+  \item pulizia morfologica (erode/dilate con opening opzionale),
+  \item estrazione componenti connesse e bounding box dei caratteri,
+  \item filtri geometrici su area, dimensioni e aspect ratio,
+  \item filtro outlier basato su mediane (area/altezza) per ridurre falsi positivi,
+  \item ordinamento in ordine di lettura (riga per riga, da sinistra a destra),
+  \item salvataggio dei crop carattere per carattere,
+  \item esportazione del file \texttt{extraction\_manifest.csv} con coordinate (x, y, w, h).
+\end{enumerate}
+
+Questa fase è coerente con il progetto perché rende esplicito il passaggio da pagina manoscritta a campioni elementari (caratteri) su cui poi si applica la pipeline morfologica e la classificazione.
+
+\paragraph{Configurazione consigliata (quality profile).}
+Per ottenere una segmentazione più pulita sui manoscritti CVL, la configurazione consigliata è:
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{--min-area 30}
+  \item \texttt{--min-width 5}
+  \item \texttt{--min-height 8}
+  \item \texttt{--max-aspect-ratio 10}
+  \item \texttt{--opening-kernel 2}
+\end{itemize}
+Questa scelta riduce in modo sensibile micro-componenti spurie e rettangoli anomali, mantenendo i caratteri utili per le fasi successive di feature extraction e classificazione.
+
+\section{Metodologia}
+\subsection{Preprocessing e morfologia}
+La pipeline operativa include quattro passaggi principali:
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{Conversione e binarizzazione (Otsu).} L'immagine in scala di grigi viene separata in foreground/sfondo con una soglia automatica. Questo rende robusta la segmentazione del tratto senza fissare soglie manuali.
+  \item \textbf{Skeletonization.} Il tratto binario viene ridotto a uno scheletro a 1 pixel di spessore, preservando connettività e struttura globale.
+  \item \textbf{Pruning iterativo.} Si rimuovono iterativamente endpoint troppo corti (rami spurii), in modo da attenuare rumore locale e micro-ramificazioni non informative.
+  \item \textbf{Estrazione feature.} Le misure sono calcolate sia sull'immagine binaria sia sullo scheletro ripulito, così da catturare informazioni complementari.
+\end{enumerate}
+
+\subsection{Perché la morfologia è centrale}
+Le operazioni morfologiche non sono un semplice preprocessing ``estetico'': costituiscono la base semantica del modello.
+In particolare:
+\begin{itemize}[leftmargin=1.5em]
+  \item la binarizzazione definisce il dominio su cui misurare area, densità e cavità;
+  \item lo scheletro rende esplicita la topologia del carattere (terminazioni, incroci, lunghezza dei rami);
+  \item il pruning aumenta il rapporto segnale/rumore delle feature strutturali.
+\end{itemize}
+
+Senza questi passaggi, molte feature perderebbero stabilità e interpretabilità.
+
+\subsection{Feature estratte}
+Le feature sono organizzate in gruppi complementari. Di seguito sono descritte con il loro significato operativo.
+
+\paragraph{1) Feature base/topologiche}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{endpoints / punte}: numero di terminazioni dello scheletro; utile per distinguere lettere aperte/chiuse o con code.
+  \item \textbf{junctions / incroci}: numero di nodi con più rami; discriminante per lettere con intersezioni interne.
+  \item \textbf{holes / buchi}: numero di cavità chiuse nel tratto (es. ``o'', ``p'', ``b'').
+  \item \textbf{componenti}: numero di componenti connesse, utile in presenza di tratti separati.
+  \item \textbf{euler\_number}: sintetizza topologia globale (componenti meno buchi).
+\end{itemize}
+
+\paragraph{2) Feature geometriche di base}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{aspect\_ratio}: rapporto larghezza/altezza della bounding box della componente principale.
+  \item \textbf{densita\_pixel}: frazione di pixel attivi sull'area totale.
+  \item \textbf{avg\_stroke\_width}: stima dello spessore medio del tratto (distance transform + scheletro).
+  \item \textbf{skeleton\_length}: lunghezza complessiva del tratto scheletrizzato.
+  \item \textbf{skeleton\_density}: densità dello scheletro rispetto all'ink totale.
+  \item \textbf{endpoint\_norm, junction\_norm}: endpoint/incroci normalizzati per lunghezza scheletro.
+  \item \textbf{pruning\_removed\_ratio}: quota di scheletro rimossa dal pruning (indicatore di rumore locale).
+\end{itemize}
+
+\paragraph{3) Feature di forma globale e invarianti}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{solidity}: rapporto area/convex hull area, misura ``pienezza'' della forma.
+  \item \textbf{extent}: rapporto area/area bounding box.
+  \item \textbf{eccentricity}: allungamento della forma principale.
+  \item \textbf{orientation}: orientazione prevalente dell'asse maggiore.
+  \item \textbf{major\_axis\_length, minor\_axis\_length, axis\_ratio}: parametri ellittici della componente principale.
+  \item \textbf{hu\_1 ... hu\_7}: momenti invarianti di Hu (log-compressi), robusti a traslazione/scala/rotazione.
+\end{itemize}
+
+\paragraph{4) Feature di struttura del grafo scheletrico}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{n\_branches}: numero di rami ottenuti rimuovendo i nodi di giunzione.
+  \item \textbf{branch\_length\_mean, branch\_length\_max, branch\_length\_std}: statistiche di lunghezza dei rami.
+\end{itemize}
+
+\paragraph{5) Feature spaziali}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{zoning 3x3} (\texttt{zone\_r*\_c*\_density}): densità locale in ciascuna cella della griglia.
+  \item \textbf{projection profiles}: statistiche dei profili orizzontali e verticali.
+  \item \textbf{spatial balance}: bilanciamento top/bottom e left/right (es. \texttt{top\_bottom\_ratio}, \texttt{left\_right\_ratio}).
+\end{itemize}
+
+\paragraph{6) Feature strutturali avanzate}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{transition features} (riga/colonna): numero e statistiche di transizioni 0↔1, indicano complessità del contorno.
+  \item \textbf{diagonal profile}: densità su diagonale principale e secondaria, con differenza tra le due.
+  \item \textbf{endpoint position}: posizione media/dispersione normalizzata delle terminazioni.
+\end{itemize}
+
+\paragraph{7) Feature confusion-driven}
+Queste feature sono pensate per migliorare coppie notoriamente ambigue:
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{scanline structure}: pattern locali su righe campione;
+  \item \textbf{border contact}: come il tratto tocca i bordi dell'immagine normalizzata;
+  \item \textbf{hole position}: posizione dei buchi (non solo quantità);
+  \item \textbf{contour depth}: profondità media del tratto verso l'interno;
+  \item \textbf{endpoint distribution}: distribuzione spaziale delle terminazioni;
+  \item \textbf{midline runs}: lunghezza dei segmenti continui su linee mediane.
+\end{itemize}
+
+\paragraph{8) Statistiche aggiuntive sulle proiezioni}
+Per \texttt{row\_proj} e \texttt{col\_proj} vengono aggiunti:
+\begin{itemize}[leftmargin=1.5em]
+  \item quantili ($q_{25}, q_{50}, q_{75}$),
+  \item asimmetria (skewness),
+  \item curtosi (kurtosis).
+\end{itemize}
+Queste misure migliorano la descrizione della distribuzione del tratto oltre la sola media/varianza.
+
+\subsection{Spiegazione esplicita del \textit{perché} di ogni feature}
+In questa sezione ogni famiglia è collegata direttamente al tipo di errore che aiuta a ridurre.
+
+\paragraph{Topologia (\texttt{punte}, \texttt{incroci}, \texttt{buchi}, \texttt{componenti}, \texttt{euler\_number}).}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{punte}: distingue lettere con code/terminazioni nette (es. tratti finali aperti) da forme più chiuse.
+  \item \texttt{incroci}: separa lettere con struttura ramificata da lettere ``a tratto unico''.
+  \item \texttt{buchi}: discrimina lettere con anello interno da lettere senza cavità.
+  \item \texttt{componenti}: identifica casi con tratti disconnessi (utile in presenza di scrittura spezzata o rumore).
+  \item \texttt{euler\_number}: sintetizza in un solo valore la relazione componenti/buchi, rendendo più robusta la distinzione topologica.
+\end{itemize}
+
+\paragraph{Geometria globale (\texttt{aspect\_ratio}, \texttt{densita\_pixel}, \texttt{avg\_stroke\_width}, \texttt{skeleton\_length}, \texttt{skeleton\_density}, \texttt{endpoint\_norm}, \texttt{junction\_norm}, \texttt{pruning\_removed\_ratio}).}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{aspect\_ratio}: separa lettere tendenzialmente ``alte'' da lettere ``larghe''.
+  \item \texttt{densita\_pixel}: misura quanta ``inchiostrazione'' c'è; utile per differenze di riempimento del gesto.
+  \item \texttt{avg\_stroke\_width}: cattura lo stile di pressione/spessore del tratto.
+  \item \texttt{skeleton\_length}: proxy della complessità/estensione del percorso scritto.
+  \item \texttt{skeleton\_density}: confronta lunghezza scheletro e area inchiostrata, distinguendo tratti sottili da forme compatte.
+  \item \texttt{endpoint\_norm}, \texttt{junction\_norm}: rendono confrontabili lettere di dimensione diversa grazie alla normalizzazione.
+  \item \texttt{pruning\_removed\_ratio}: indica quanto rumore ramificato era presente; è informativa per stili tremolanti o sbavati.
+\end{itemize}
+
+\paragraph{Forma principale (\texttt{solidity}, \texttt{extent}, \texttt{eccentricity}, \texttt{orientation}, \texttt{major\_axis\_length}, \texttt{minor\_axis\_length}, \texttt{axis\_ratio}).}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{solidity}: distingue forme compatte da forme con rientranze.
+  \item \texttt{extent}: misura quanto la lettera occupa la propria bounding box.
+  \item \texttt{eccentricity} e \texttt{axis\_ratio}: misurano l'allungamento e aiutano su coppie con simile topologia ma proporzioni diverse.
+  \item \texttt{orientation}: cattura inclinazione prevalente (utile su calligrafie inclinate).
+  \item \texttt{major/minor\_axis\_length}: aggiungono scala e forma ellittica della componente dominante.
+\end{itemize}
+
+\paragraph{Invarianti di momento (\texttt{hu\_1} ... \texttt{hu\_7}).}
+Le Hu moments sono utili perché conservano informazione di forma anche in presenza di piccole variazioni geometriche; riducono la sensibilità a traslazione/scala/rotazione e quindi migliorano la robustezza inter-soggetto.
+
+\paragraph{Struttura dei rami (\texttt{n\_branches}, \texttt{branch\_length\_mean}, \texttt{branch\_length\_max}, \texttt{branch\_length\_std}).}
+Queste feature descrivono la ``grammatica'' interna dello scheletro: quante diramazioni ci sono e quanto sono lunghe/variabili. Sono particolarmente utili quando due lettere hanno area simile ma struttura interna differente.
+
+\paragraph{Distribuzione spaziale locale (\texttt{zone\_r*\_c*\_density}, \texttt{row\_proj\_*}, \texttt{col\_proj\_*}, \texttt{top\_bottom\_ratio}, \texttt{left\_right\_ratio}).}
+\begin{itemize}[leftmargin=1.5em]
+  \item lo \textbf{zoning 3x3} localizza dove si concentra il tratto;
+  \item i \textbf{projection profiles} descrivono il profilo verticale/orizzontale della forma;
+  \item il \textbf{spatial balance} separa lettere ``sbilanciate in alto/basso'' o ``a sinistra/destra''.
+\end{itemize}
+Insieme riducono confusioni tra lettere con stessa area totale ma diversa disposizione del tratto.
+
+\paragraph{Complessità del contorno (\texttt{row\_trans\_*}, \texttt{col\_trans\_*}, \texttt{main\_diag\_density}, \texttt{anti\_diag\_density}, \texttt{diag\_density\_diff}).}
+Le transizioni 0↔1 quantificano quante volte il segnale entra/esce dal tratto lungo righe/colonne: più transizioni implicano contorni più complessi. Le diagonali aggiungono sensibilità alla direzione dominante del gesto, utile per lettere inclinate o oblique.
+
+\paragraph{Posizionamento delle terminazioni (\texttt{endpoint\_x\_mean\_norm}, \texttt{endpoint\_y\_mean\_norm}, \texttt{endpoint\_x\_std\_norm}, \texttt{endpoint\_y\_std\_norm}, \texttt{endpoint\_distribution\_*}).}
+Queste misure spiegano \textit{dove} finiscono i tratti: terminazioni concentrate in alto, in basso o distribuite su tutta la lettera. Sono utili per separare lettere con stesso numero di endpoint ma disposizione differente.
+
+\paragraph{Feature confusion-driven (\texttt{scanline\_*}, \texttt{border\_contact\_*}, \texttt{hole\_position\_*}, \texttt{contour\_depth\_*}, \texttt{midline\_run\_*}).}
+Sono state introdotte per migliorare coppie ambigue osservate in confusion matrix.
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{scanline\_*}: confrontano pattern locali su linee specifiche.
+  \item \texttt{border\_contact\_*}: rilevano se il tratto tocca certi bordi (informazione discriminativa di forma aperta/chiusa).
+  \item \texttt{hole\_position\_*}: aggiungono la posizione delle cavità, non solo il conteggio.
+  \item \texttt{contour\_depth\_*}: misurano ``profondità'' e penetrazione del tratto rispetto al bordo.
+  \item \texttt{midline\_run\_*}: quantificano segmenti continui sulle linee mediane, utili per distinguere andamenti centrali del tratto.
+\end{itemize}
+
+\paragraph{Statistiche di forma dei profili (\texttt{row/col\_proj\_q25/q50/q75}, \texttt{row/col\_proj\_skew}, \texttt{row/col\_proj\_kurtosis}).}
+Queste statistiche non descrivono solo ``quanto'' tratto è presente, ma \textit{come} è distribuito: asimmetria e curtosi aiutano a distinguere profili con stessa media ma forma diversa.
+
+\section{Setup sperimentale}
+\subsection{Split holdout per soggetto}
+Per testare la generalizzazione reale, la divisione è fatta sui soggetti e non sui singoli campioni.
+Questo significa che il modello in test vede stili grafici completamente nuovi.
+
+\begin{itemize}[leftmargin=1.5em]
+  \item train: 15 soggetti (11610 campioni)
+  \item test: 5 soggetti (2911 campioni)
+\end{itemize}
+
+\subsection{Cross-validation subject-wise}
+Per robustezza statistica è usata anche una CV a 5 fold subject-wise.
+Ogni fold mantiene la separazione per soggetto, così la varianza tra fold riflette differenze di stile realistiche.
+
+\subsection{Modelli e metriche}
+Sono confrontati tre modelli con ipotesi diverse:
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{SVM RBF}: adatto a separazioni non lineari in spazi ad alta dimensione;
+  \item \textbf{ExtraTrees}: ensemble ad albero molto robusto a feature eterogenee;
+  \item \textbf{XGBoost}: boosting gradient-based, spesso molto efficace su feature engineering tabellare.
+\end{itemize}
+
+Metriche principali:
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Accuracy}: quota complessiva di predizioni corrette;
+  \item \textbf{Macro-F1}: media F1 per classe con peso uniforme (fondamentale in presenza di difficoltà diverse tra lettere).
+\end{itemize}
+
+Completano l'analisi: report per classe, confusion matrix, F1 per lettera.
+
+\section{Risultati}
+\subsection{Risultati holdout aggiornati}
+\begin{table}[H]
+\centering
+\caption{Confronto modelli su holdout subject-wise}
+\begin{tabular}{lcc}
+\toprule
+Modello & Accuracy & Macro-F1 \\
+\midrule
+XGBoost & 0.7369 & 0.7338 \\
+SVM RBF & 0.7248 & 0.7239 \\
+ExtraTrees & 0.7238 & 0.7205 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Il miglior modello in holdout risulta \textbf{XGBoost}.
+La differenza, pur non enorme, è coerente su entrambe le metriche principali e indica una migliore capacità di sfruttare la varietà delle feature estratte.
+
+\subsection{Risultati CV subject-wise (riferimento)}
+\begin{table}[H]
+\centering
+\caption{CV 5-fold subject-wise (media $\pm$ deviazione standard)}
+\begin{tabular}{lcc}
+\toprule
+Modello & Accuracy & Macro-F1 \\
+\midrule
+XGBoost & $0.7676 \pm 0.0246$ & $0.7236 \pm 0.0269$ \\
+SVM RBF & $0.7372 \pm 0.0427$ & $0.7039 \pm 0.0351$ \\
+ExtraTrees & $0.7472 \pm 0.0265$ & $0.6898 \pm 0.0306$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+In CV si osserva una buona stabilità del modello migliore: la deviazione standard resta contenuta e conferma che il comportamento non dipende da un singolo split favorevole.
+
+
+\subsection{Ablation study dei gruppi di feature}
+Per quantificare il contributo dei diversi blocchi di feature è stato eseguito un ablation study con XGBoost: si rimuove un gruppo alla volta e si misura la variazione di performance rispetto alla configurazione \texttt{all\_features}.
+
+Nel setup di riferimento dell'ablation (stesso split subject-wise in cache) la baseline è:
+\begin{itemize}[leftmargin=1.5em]
+  \item Accuracy = 0.7269
+  \item Macro-F1 = 0.7250
+\end{itemize}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{output/classification_advanced/organized/03_ablation/ablation_delta_macro_f1.png}
+  \caption{Ablation XGBoost: variazione di Macro-F1 quando si rimuove ciascun gruppo di feature.}
+  \label{fig:ablation_delta}
+\end{figure}
+
+L'immagine in Figura~\ref{fig:ablation_delta} si interpreta così:
+\begin{itemize}[leftmargin=1.5em]
+  \item barre a sinistra dello zero (\(\Delta\) Macro-F1 negativo) indicano gruppi \textbf{importanti}: rimuoverli peggiora il modello;
+  \item barre a destra dello zero (\(\Delta\) Macro-F1 positivo) indicano gruppi potenzialmente \textbf{ridondanti} o rumorosi in questo setup.
+\end{itemize}
+
+I risultati più rilevanti sono riportati in Tabella~\ref{tab:ablation_key_groups}.
+
+\begin{table}[H]
+\centering
+\caption{Ablation XGBoost: gruppi principali e impatto su Macro-F1.}
+\label{tab:ablation_key_groups}
+\begin{tabular}{lc}
+\toprule
+Gruppo rimosso & $\Delta$ Macro-F1 vs all\_features \\
+\midrule
+\texttt{projection\_profiles} & -0.0166 \\
+\texttt{transition\_profiles} & -0.0063 \\
+\texttt{engineered\_interactions} & -0.0039 \\
+\texttt{global\_shape} & -0.0028 \\
+\texttt{stroke\_geometry} & +0.0119 \\
+\texttt{hu\_moments} & +0.0101 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+In particolare, la rimozione di \texttt{projection\_profiles} produce la perdita più alta (\(-0.0166\) Macro-F1), quindi questo blocco risulta il più informativo nel setup corrente. Al contrario, la rimozione di \texttt{stroke\_geometry} e \texttt{hu\_moments} migliora leggermente la metrica in questo split: questo suggerisce possibile ridondanza e motiva una successiva feature selection mirata.
+
+
+\section{Analisi qualitativa e diagnostica}
+Per comprendere \textit{come} il modello decide e \textit{dove} sbaglia, l'analisi qualitativa include:
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{heatmap correlazioni feature}: individua ridondanze e gruppi informativi;
+  \item \textbf{proiezione PCA 2D}: visualizza la separazione globale tra classi;
+  \item \textbf{confusion matrix}: mostra le coppie di lettere critiche;
+  \item \textbf{F1 per lettera}: misura quali classi sono deboli/forti in modo puntuale.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{output/analysis/plots/feature_correlation_heatmap.png}
+    \caption{Heatmap di correlazione (gruppi di feature).}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{output/analysis/plots/feature_space_pca_2d.png}
+    \caption{PCA 2D del feature space.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/raw/confusion_matrix_xgboost.png}
+    \caption{Confusion matrix del modello XGBoost (holdout).}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/raw/confusion_matrix_svm_rbf.png}
+  \caption{Confusion matrix del modello SVM RBF (holdout).}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/raw/confusion_matrix_extra_trees.png}
+  \caption{Confusion matrix del modello ExtraTrees (holdout).}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/normalized/confusion_matrix_xgboost_normalized.png}
+  \caption{Confusion matrix normalizzata del modello XGBoost.}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/normalized/confusion_matrix_svm_rbf_normalized.png}
+  \caption{Confusion matrix normalizzata del modello SVM RBF.}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/normalized/confusion_matrix_extra_trees_normalized.png}
+  \caption{Confusion matrix normalizzata del modello ExtraTrees.}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/feature_importance/xgboost_feature_importance_top20.png}
+  \caption{Feature importance (Top-20) del modello XGBoost.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/f1_by_letter/f1_by_letter_xgboost.png}
+    \caption{F1-score per lettera del best model.}
+\end{figure}
+
+\section{Discussione}
+I risultati mostrano in modo coerente che:
+\begin{itemize}[leftmargin=1.5em]
+  \item il feature engineering morfologico produce prestazioni competitive senza ricorrere a CNN;
+  \item il setup subject-wise riduce in modo sostanziale il rischio di overfitting a uno specifico stile;
+  \item le confusioni residue sono semanticamente plausibili (coppie graficamente simili).
+\end{itemize}
+
+Dal punto di vista metodologico, il valore principale è la tracciabilità della decisione:
+si può collegare un errore a gruppi specifici di feature e quindi proporre miglioramenti mirati.
+L'approccio è quindi particolarmente adatto quando si richiedono \textbf{interpretabilità}, \textbf{diagnostica} e \textbf{controllo} del processo.
+
+\section{Conclusioni e sviluppi futuri}
+Il progetto fornisce una pipeline completa, ripetibile e interpretabile per l'analisi e la classificazione di lettere manoscritte.
+Il contributo non è solo nel valore numerico finale, ma nella costruzione di un processo leggibile in tutte le sue fasi: dalla morfologia all'analisi dell'errore.
+
+Come sviluppi futuri:
+\begin{enumerate}[leftmargin=1.5em]
+  \item feature selection mirata sulle classi più deboli (riduzione ridondanza e maggiore robustezza);
+  \item tuning iperparametri con protocollo nested CV per una stima ancora più rigorosa;
+  \item estensione ibrida con backbone CNN leggero, mantenendo le feature morfologiche come canale interpretabile;
+  \item analisi dell'importanza delle feature per gruppo, per guidare nuove iterazioni di design.
+\end{enumerate}
+
+\appendix
+\section{Riproducibilità}
+\subsection{Script principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{extract\_characters\_cvl.py}: segmenta caratteri da immagini CVL (single/batch), applica filtri geometrici/outlier e salva un manifest con bounding box.
+  \item \texttt{analyze\_letter.py}: esegue preprocessing+morfologia e costruisce il dataset di feature campione per campione.
+  \item \texttt{train\_noncnn\_advanced.py}: allena e confronta SVM/ExtraTrees/XGBoost su split holdout per soggetto.
+  \item \texttt{crossval\_subjectwise.py}: stima robustezza con CV subject-wise a 5 fold.
+  \item \texttt{ablation\_noncnn\_morphology.py}: studia l'impatto dei gruppi di feature (ablation).
+\end{itemize}
+
+\subsection{Output principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{output/extracted\_characters/extraction\_manifest.csv}
+  \item \texttt{output/classification\_advanced/organized/01\_holdout/advanced\_summary.csv}
+  \item \texttt{output/classification\_advanced/organized/01\_holdout/advanced\_metrics.json}
+  \item \texttt{output/classification\_advanced/organized/02\_cv\_subjectwise/cv\_subjectwise\_summary.csv}
+  \item \texttt{output/classification\_advanced/organized/03\_ablation/ablation\_summary.csv}
+  \item \texttt{output/classification\_advanced/organized/03\_ablation/ablation\_group\_importance\_ranked.csv}
+  \item \texttt{output/classification\_advanced/organized/03\_ablation/ablation\_feature\_group\_coverage.csv}
+  \item \texttt{output/classification\_advanced/organized/03\_ablation/ablation\_delta\_macro\_f1.png}
+  \item \texttt{output/classification\_advanced/organized/03\_ablation/ablation\_report.json}
+  \item \texttt{output/classification\_advanced/organized/04\_diagnostics/confusion\_matrices/raw/confusion\_matrix\_xgboost.png}
+  \item \texttt{output/classification\_advanced/organized/04\_diagnostics/confusion\_matrices/raw/confusion\_matrix\_svm\_rbf.png}
+  \item \texttt{output/classification\_advanced/organized/04\_diagnostics/confusion\_matrices/raw/confusion\_matrix\_extra\_trees.png}
+  \item \texttt{output/classification\_advanced/organized/04\_diagnostics/confusion\_matrices/normalized/confusion\_matrix\_xgboost\_normalized.png}
+  \item \texttt{output/classification\_advanced/organized/04\_diagnostics/confusion\_matrices/normalized/confusion\_matrix\_svm\_rbf\_normalized.png}
+  \item \texttt{output/classification\_advanced/organized/04\_diagnostics/confusion\_matrices/normalized/confusion\_matrix\_extra\_trees\_normalized.png}
+  \item \texttt{output/classification\_advanced/organized/04\_diagnostics/feature\_importance/xgboost\_feature\_importance\_top20.png}
+\end{itemize}
+
+\subsection{Procedura minima di esecuzione}
+\begin{enumerate}[leftmargin=1.5em]
+  \item (Opzionale) Segmentazione caratteri CVL: \texttt{python extract\_characters\_cvl.py --input <path> --output <path> --save-debug --min-area 30 --min-width 5 --min-height 8 --max-aspect-ratio 10 --opening-kernel 2}
+  \item Generare le feature: \texttt{python analyze\_letter.py}
+  \item Allenare e valutare in holdout: \texttt{python train\_noncnn\_advanced.py}
+  \item Eseguire CV subject-wise: \texttt{python crossval\_subjectwise.py}
+  \item (Opzionale) Eseguire ablation: \texttt{python ablation\_noncnn\_morphology.py}
+\end{enumerate}
+
+\end{document}
