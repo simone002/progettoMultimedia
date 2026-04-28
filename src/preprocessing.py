@@ -1,7 +1,7 @@
 # Funzioni per binarizzazione e pulizia iniziale
 import numpy as np
 from skimage import io, color, filters, util
-
+# questo file contiene funzioni per caricare, binarizzare e pulire le immagini prima dell'analisi morfologica.
 def load_and_binarize(image_path, invert=True):
     """Carica un'immagine, la converte in scala di grigi e applica Otsu."""
     img = io.imread(image_path)

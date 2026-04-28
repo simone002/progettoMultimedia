@@ -28,6 +28,8 @@ from src.morphology_logic import (
     midline_run_features,
 )
 from skimage import morphology, measure
+# questo file si occupa di analizzare le lettere presenti in data/lettere,
+#  estrarre feature e statistiche
 
 BASE_DIR = Path(__file__).resolve().parent
 LETTERE_DIR = BASE_DIR / 'data' / 'lettere'
@@ -219,7 +221,6 @@ def analyze_alphabet():
     print(f"Campioni elaborati con successo: {total_processed}")
     print(f"Errori: {total_errors}")
 
-    # Creazione tabella riassuntiva
     df = pd.DataFrame(results)
     if df.empty:
         raise RuntimeError("Nessun campione trovato per l'analisi.")
@@ -235,7 +236,6 @@ def analyze_alphabet():
           .round(3)
     )
 
-    # Aggiungi anche analisi per soggetto
     summary_per_subject = (
         df.drop(columns=['file'])
           .groupby(['soggetto', 'lettera'])

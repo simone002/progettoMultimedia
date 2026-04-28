@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
+#questo file contiene funzioni per creare grafici e confronti tra le lettere basati 
+# sui dati estratti da analyze_letter.py.
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 SUMMARY_CSV = BASE_DIR / 'output' / 'analysis' / 'features_summary.csv'
 SAMPLES_CSV = BASE_DIR / 'output' / 'analysis' / 'features_samples.csv'

@@ -12,6 +12,13 @@ from sklearn.preprocessing import LabelEncoder
 
 from xgboost import XGBClassifier
 
+# questo file contiene la logica per eseguire uno studio di ablation
+#  sui gruppi di feature morfologiche estratte da analyze_letter.py,
+
+#uno studio di ablation è una tecnica per valutare
+#  l'importanza di gruppi di feature rimuovendoli uno alla volta
+#  e osservando l'effetto sulle prestazioni del modello.
+
 
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_CSV = BASE_DIR / "output" / "analysis" / "features_samples.csv"

@@ -5,6 +5,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
+# questo file si occupa di leggere i risultati della crossval subject-wise
+#  (generati da crossval_subjectwise.py) e creare dei plot riassuntivi per 
+# confronto modelli, trend per fold e confusions più frequenti.
 
 BASE_DIR = Path(__file__).resolve().parent
 CV_DIR = BASE_DIR / "output" / "classification_advanced" / "organized" / "02_cv_subjectwise"

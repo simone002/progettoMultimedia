@@ -11,6 +11,14 @@ import numpy as np
 
 SUPPORTED_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
 
+# questo file contiene la logica per estrarre i caratteri dalle immagini CVL, 
+# sia in modalità single che batch,
+#  con molte opzioni configurabili per la binarizzazione, pulizia,
+#  filtraggio e salvataggio dei risultati. L'obiettivo è ottenere i singoli caratteri 
+# in formato PNG, pronti per l'analisi morfologica successiva.
+#usage esempio:
+# python extract_characters_cvl.py --input "data/cvl/single_image.png"
+
 
 @dataclass
 class ExtractionConfig:

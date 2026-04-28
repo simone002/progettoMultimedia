@@ -5,6 +5,12 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+# questo file contiene la logica per generare un report testuale di analisi dei risultati
+# basato sui dati estratti da analyze_letter.py. Il report include statistiche generali, 
+# correlazioni tra feature, lettere più/meno complesse, variabilità intra-lettera e 
+# osservazioni chiave. Il report viene salvato in formato Markdown per una facile
+#  lettura e condivisione.
+
 BASE_DIR = Path(__file__).resolve().parent
 SAMPLES_CSV = BASE_DIR / 'output' / 'analysis' / 'features_samples.csv'
 SUMMARY_CSV = BASE_DIR / 'output' / 'analysis' / 'features_summary.csv'

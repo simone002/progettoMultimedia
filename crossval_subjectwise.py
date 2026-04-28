@@ -17,6 +17,11 @@ from sklearn.ensemble import ExtraTreesClassifier
 
 from xgboost import XGBClassifier
 
+# questo file contiene la logica per eseguire una cross-validation subject-wise
+#  sui dati estratti da analyze_letter.py, valutando più modelli e salvando
+#  i risultati in CSV e JSON. La cross-validation subject-wise è una tecnica per valutare
+#  le prestazioni di un modello su dati di soggetti non visti durante l'addestramento,
+#  simulando meglio l'uso reale su nuovi soggetti.
 
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_CSV = BASE_DIR / "output" / "analysis" / "features_samples.csv"

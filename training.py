@@ -23,6 +23,12 @@ from sklearn.ensemble import ExtraTreesClassifier
 
 from xgboost import XGBClassifier
 
+# questo file contiene la logica per eseguire un'analisi di classificazione avanzata
+#  sui dati estratti da analyze_letter.py, utilizzando modelli non-CNN come SVM, Extra Trees
+#  e XGBoost, con un focus particolare sulla generalizzazione subject-wise.
+# I risultati includono metriche di performance, confusion matrices,
+#  feature importance e analisi dettagliate per coppie di lettere specifiche. 
+# I risultati vengono salvati in CSV, JSON e immagini per una facile consultazione e confronto.
 
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_CSV = BASE_DIR / "output" / "analysis" / "features_samples.csv"

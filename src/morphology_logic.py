@@ -4,6 +4,7 @@ import numpy as np
 from skimage import morphology, measure
 from scipy.ndimage import binary_hit_or_miss, distance_transform_edt
 
+# questo file contiene le funzioni principali per l'analisi morfologica:
 
 def get_endpoint_kernels():
     """Ritorna gli 8 kernel per trovare i pixel terminali (punte)."""

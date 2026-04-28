@@ -69,21 +69,27 @@ Statistiche principali:
 In pratica, ogni campione attraversa la stessa pipeline morfologica e viene trasformato in un vettore numerico uniforme, poi aggregabile per analisi globale o per soggetto.
 
 \subsection{Preparazione del dataset: estrazione caratteri da CVL}
-Per includere anche la fase di costruzione del dataset, è stato aggiunto uno script dedicato:
-\texttt{extract\_characters\_cvl.py}.
+La prima fase del progetto non è la classificazione, ma la costruzione del dataset a partire dalle pagine manoscritte.
+Per questo è stato aggiunto uno script dedicato, \texttt{extract\_characters\_cvl.py}, che trasforma una pagina completa in singoli crop di carattere pronti per l'analisi successiva.
+
+In altre parole, questa fase fa da ponte tra i manoscritti grezzi e la pipeline morfologica: senza segmentazione dei caratteri, non avremmo campioni omogenei su cui calcolare le feature e addestrare i modelli.
 
 Lo script opera su immagine singola o in batch e realizza:
 \begin{enumerate}[leftmargin=1.5em]
   \item conversione in grayscale,
-  \item binarizzazione adattiva + denoising,
-  \item pulizia morfologica (erode/dilate con opening opzionale),
-  \item estrazione componenti connesse e bounding box dei caratteri,
-  \item filtri geometrici su area, dimensioni e aspect ratio,
-  \item filtro outlier basato su mediane (area/altezza) per ridurre falsi positivi,
+  \item binarizzazione adattiva con soglia gaussiana e inversione del foreground,
+  \item denoising per attenuare piccoli artefatti e rumore impulsivo,
+  \item erosione e dilatazione per ripulire il tratto e stabilizzare i contorni,
+  \item eventuale opening/closing per rimuovere micro-componenti isolate o chiudere piccole interruzioni,
+  \item estrazione delle componenti connesse e delle bounding box candidate,
+  \item filtraggio geometrico su area, larghezza, altezza e aspect ratio,
+  \item filtro outlier basato su mediane (area/altezza) per scartare box troppo grandi rispetto al comportamento tipico della pagina,
   \item ordinamento in ordine di lettura (riga per riga, da sinistra a destra),
   \item salvataggio dei crop carattere per carattere,
   \item esportazione del file \texttt{extraction\_manifest.csv} con coordinate (x, y, w, h).
 \end{enumerate}
+
+Dal punto di vista operativo, quindi, l'immagine viene prima normalizzata e ripulita, poi segmentata in regioni candidate, e infine rifinita con controlli geometrici per ottenere crop di carattere più consistenti e utili alle fasi successive.
 
 Questa fase è coerente con il progetto perché rende esplicito il passaggio da pagina manoscritta a campioni elementari (caratteri) su cui poi si applica la pipeline morfologica e la classificazione.
 
@@ -97,6 +103,8 @@ Per ottenere una segmentazione più pulita sui manoscritti CVL, la configurazion
   \item \texttt{--opening-kernel 2}
 \end{itemize}
 Questa scelta riduce in modo sensibile micro-componenti spurie e rettangoli anomali, mantenendo i caratteri utili per le fasi successive di feature extraction e classificazione.
+
+Dal punto di vista del flusso complessivo, questa è la parte che precede tutto il resto: prima estraggo i caratteri, poi applico la morfologia, poi costruisco le feature e infine alleno i modelli.
 
 \section{Metodologia}
 \subsection{Preprocessing e morfologia}
@@ -335,8 +343,9 @@ Nel setup di riferimento dell'ablation (stesso split subject-wise in cache) la b
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.9\textwidth]{output/classification_advanced/organized/03_ablation/ablation_delta_macro_f1.png}
-  \caption{Ablation XGBoost: variazione di Macro-F1 quando si rimuove ciascun gruppo di feature.}
+  \includegraphics[width=0.9\textwidth]{ablation_delta_macro_f1.png}
+  \caption{Ablation XGBoost: variazione di Macro-F1 quando si rimuove ciascun gruppo di feature.\newline
+  \textit{Cosa mostra:} l'effetto marginale di ogni gruppo sulla qualità del modello. \textit{Cosa ci dice:} le barre negative identificano gruppi informativi, le positive gruppi potenzialmente ridondanti nel setup corrente.}
   \label{fig:ablation_delta}
 \end{figure}
 
@@ -366,6 +375,14 @@ Gruppo rimosso & $\Delta$ Macro-F1 vs all\_features \\
 \end{tabular}
 \end{table}
 
+Il motivo della perdita è che questi gruppi non descrivono dettagli secondari, ma aspetti strutturali molto informativi della lettera.
+\texttt{projection\_profiles} cattura come l'inchiostro si distribuisce lungo righe e colonne, quindi separa bene lettere con massa concentrata in zone diverse; quando lo rimuovo, il modello perde informazione sulla geometria globale.
+\texttt{transition\_profiles} misura la complessità locale del contorno e la frequenza di passaggi tra fondo e tratto, perciò aiuta a distinguere lettere con profili simili ma bordi differenti.
+\texttt{engineered\_interactions} combina feature base già utili in forma non lineare, quindi la loro rimozione elimina relazioni tra endpoint, buchi e densità che XGBoost sfrutta molto bene.
+\texttt{global\_shape} racchiude invece proprietà di forma complessiva come solidità, eccentricità e aspect ratio, cioè segnali importanti per distinguere lettere verticali, arrotondate o allungate.
+
+Al contrario, il miglioramento leggero ottenuto togliendo \texttt{stroke\_geometry} e \texttt{hu\_moments} suggerisce che, nello split corrente, queste feature siano in parte ridondanti rispetto ad altri descrittori già presenti oppure più sensibili a variazioni di scrittura e normalizzazione.
+
 In particolare, la rimozione di \texttt{projection\_profiles} produce la perdita più alta (\(-0.0166\) Macro-F1), quindi questo blocco risulta il più informativo nel setup corrente. Al contrario, la rimozione di \texttt{stroke\_geometry} e \texttt{hu\_moments} migliora leggermente la metrica in questo split: questo suggerisce possibile ridondanza e motiva una successiva feature selection mirata.
 
 
@@ -380,62 +397,72 @@ Per comprendere \textit{come} il modello decide e \textit{dove} sbaglia, l'anali
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.8\textwidth]{output/analysis/plots/feature_correlation_heatmap.png}
-    \caption{Heatmap di correlazione (gruppi di feature).}
+    \includegraphics[width=0.8\textwidth]{feature_correlation_heatmap.png}
+  \caption{Heatmap di correlazione (gruppi di feature).\newline
+  \textit{Cosa mostra:} il livello di correlazione media tra blocchi di feature. \textit{Cosa ci dice:} blocchi molto correlati possono introdurre ridondanza, blocchi meno correlati aggiungono informazione complementare.}
 \end{figure}
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.75\textwidth]{output/analysis/plots/feature_space_pca_2d.png}
-    \caption{PCA 2D del feature space.}
+    \includegraphics[width=0.75\textwidth]{feature_space_pca_2d.png}
+  \caption{PCA 2D del feature space.\newline
+  \textit{Cosa mostra:} la proiezione bidimensionale delle lettere nello spazio delle feature. \textit{Cosa ci dice:} cluster separati indicano buona discriminabilità, sovrapposizioni anticipano possibili confusioni tra classi simili.}
 \end{figure}
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/raw/confusion_matrix_xgboost.png}
-    \caption{Confusion matrix del modello XGBoost (holdout).}
+    \includegraphics[width=0.85\textwidth]{confusion_matrix_xgboost.png}
+  \caption{Confusion matrix del modello XGBoost (holdout).\newline
+  \textit{Cosa mostra:} conteggi assoluti di predizioni corrette/errate per ogni coppia vera-predetta. \textit{Cosa ci dice:} evidenzia dove il best model concentra gli errori e quali lettere risultano più stabili.}
 \end{figure}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/raw/confusion_matrix_svm_rbf.png}
-  \caption{Confusion matrix del modello SVM RBF (holdout).}
+  \includegraphics[width=0.85\textwidth]{confusion_matrix_svm_rbf.png}
+  \caption{Confusion matrix del modello SVM RBF (holdout).\newline
+  \textit{Cosa mostra:} errori e successi assoluti della SVM sulle classi di test. \textit{Cosa ci dice:} permette il confronto diretto con XGBoost sulle stesse coppie di lettere difficili.}
 \end{figure}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/raw/confusion_matrix_extra_trees.png}
-  \caption{Confusion matrix del modello ExtraTrees (holdout).}
+  \includegraphics[width=0.85\textwidth]{confusion_matrix_extra_trees.png}
+  \caption{Confusion matrix del modello ExtraTrees (holdout).\newline
+  \textit{Cosa mostra:} distribuzione degli errori in valore assoluto per il modello ad alberi randomizzati. \textit{Cosa ci dice:} chiarisce se il comportamento dell'ensemble differisce da SVM/XGBoost su lettere graficamente affini.}
 \end{figure}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/normalized/confusion_matrix_xgboost_normalized.png}
-  \caption{Confusion matrix normalizzata del modello XGBoost.}
+  \includegraphics[width=0.85\textwidth]{confusion_matrix_xgboost_normalized.png}
+  \caption{Confusion matrix normalizzata del modello XGBoost.\newline
+  \textit{Cosa mostra:} tassi di errore/correttezza per classe indipendenti dalla numerosità. \textit{Cosa ci dice:} consente di vedere quali lettere sono intrinsecamente più complesse da riconoscere anche con supporto diverso.}
 \end{figure}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/normalized/confusion_matrix_svm_rbf_normalized.png}
-  \caption{Confusion matrix normalizzata del modello SVM RBF.}
+  \includegraphics[width=0.85\textwidth]{confusion_matrix_svm_rbf_normalized.png}
+  \caption{Confusion matrix normalizzata del modello SVM RBF.\newline
+  \textit{Cosa mostra:} probabilità di confusione classe-per-classe per la SVM. \textit{Cosa ci dice:} rende confrontabile la robustezza della SVM su classi rare e classi frequenti.}
 \end{figure}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/confusion_matrices/normalized/confusion_matrix_extra_trees_normalized.png}
-  \caption{Confusion matrix normalizzata del modello ExtraTrees.}
+  \includegraphics[width=0.85\textwidth]{confusion_matrix_extra_trees_normalized.png}
+  \caption{Confusion matrix normalizzata del modello ExtraTrees.\newline
+  \textit{Cosa mostra:} profilo di errore relativo del modello ExtraTrees. \textit{Cosa ci dice:} aiuta a identificare quali classi perdono più precisione/recall rispetto agli altri modelli.}
 \end{figure}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/feature_importance/xgboost_feature_importance_top20.png}
-  \caption{Feature importance (Top-20) del modello XGBoost.}
+  \includegraphics[width=0.85\textwidth]{xgboost_feature_importance_top20.png}
+  \caption{Feature importance (Top-20) del modello XGBoost.\newline
+  \textit{Cosa mostra:} le feature con maggior contributo alle decisioni del boosting. \textit{Cosa ci dice:} evidenzia i segnali morfologici più discriminativi e guida eventuale feature selection.}
 \end{figure}
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.85\textwidth]{output/classification_advanced/organized/04_diagnostics/f1_by_letter/f1_by_letter_xgboost.png}
-    \caption{F1-score per lettera del best model.}
+    \includegraphics[width=0.85\textwidth]{f1_by_letter_xgboost.png}
+  \caption{F1-score per lettera del best model.\newline
+  \textit{Cosa mostra:} performance della migliore configurazione su ciascuna lettera. \textit{Cosa ci dice:} individua classi forti e classi deboli su cui concentrare miglioramenti mirati.}
 \end{figure}
 
 \section{Discussione}
