@@ -106,6 +106,50 @@ Questa scelta riduce in modo sensibile micro-componenti spurie e rettangoli anom
 
 Dal punto di vista del flusso complessivo, questa è la parte che precede tutto il resto: prima estraggo i caratteri, poi applico la morfologia, poi costruisco le feature e infine alleno i modelli.
 
+\subsection{Demo visiva della pipeline}
+Per illustrare passo-passo l'intero flusso è stato aggiunto un modulo di visualizzazione: \texttt{pipeline\_visual\_classifier.py}. 
+Insieme a \texttt{train\_xgboost\_bundle.py} (che allena un modello XGBoost e salva un bundle contenente modello, imputer e label-encoder), il modulo di visualizzazione esegue: estrazione dei box, salvataggio di un'immagine di preprocessing della pagina, generazione di pagine-grid con i crop classificati e figure di dettaglio per singoli caratteri.
+
+Questa è la parte che puoi mostrare subito quando ti chiedono di vedere i risultati in modo visivo: la sequenza va dalla pagina intera ai crop, fino alla classificazione del singolo carattere.
+
+Per eseguire la demo (dopo aver generato il bundle con \texttt{train\_xgboost\_bundle.py}):
+\begin{verbatim}
+python pipeline_visual_classifier.py --input data/manoscritti/0002-1.tif --bundle-path output/classification_advanced/organized/06_model_artifacts/xgboost_bundle.joblib --output output/pipeline_demo
+\end{verbatim}
+
+Il modulo genera una cartella di report, ad esempio `output/pipeline_demo/0002-1/`, contenente immagini e file utili alla presentazione.
+
+Esempi di immagini create dalla demo, in ordine di lettura della pipeline:
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/pipeline_demo/0002-1/01_page_processing.png}
+  \caption{Elaborazione della pagina - documento originale, grayscale, binarizzazione e bounding box rilevati.\newline
+  \textit{Cosa mostra:} i principali step di preprocessing su una pagina di manoscritto; \textit{Cosa ci dice:} come vengono individuati i candidati crop e quanto pulita è la binarizzazione prima di estrarre i caratteri.}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/pipeline_demo/0002-1/02_extracted_characters.png}
+  \caption{Panoramica dei caratteri estratti e classificati.\newline
+  \textit{Cosa mostra:} i crop ottenuti dalla segmentazione, già accompagnati dalla lettera predetta e dalla confidenza del modello; \textit{Cosa ci dice:} permette di capire al volo se l'estrazione è pulita e se il classificatore sta leggendo correttamente i caratteri.}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/pipeline_demo/0002-1/03_selected_character_detail.png}
+  \caption{Dettaglio di un carattere selezionato: crop, binarizzazione e scheletro pulito con feature principali.\newline
+  \textit{Cosa mostra:} visualizzazione affiancata del crop, la sua binarizzazione e lo scheletro dopo pruning, con le feature numeriche più rilevanti; \textit{Cosa ci dice:} permette di spiegare la predizione caso per caso e verificare se errori sono causati dall'estrazione o dalla rappresentazione feature.}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{output/pipeline_demo/0002-1/04_character_details_batch/04_character_detail_0001_char_001_a.png}
+  \caption{Esempio di figure dettagliate generate per tutti i caratteri (in cartelle per lettera).\newline
+  \textit{Cosa mostra:} singoli esempi salvati per lettera con valore predetto e principali feature; \textit{Cosa ci dice:} utile per analisi errori sistematici e per selezionare esempi per la presentazione o per l'annotazione umana.}
+\end{figure}
+
+Queste immagini sono pensate per essere incluse nella presentazione: mostrano l'intera catena operativa e permettono di motivare tutte le scelte di preprocessing, estrazione e classificazione.
+
 \section{Metodologia}
 \subsection{Preprocessing e morfologia}
 La pipeline operativa include quattro passaggi principali:
